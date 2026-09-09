@@ -6,7 +6,7 @@
 
   <groupId>com.burov</groupId>
   <artifactId>support</artifactId>
-  <version>0.0.2</version>
+  <version>0.0.3</version>
   <packaging>jar</packaging>
 
   <properties>
@@ -28,6 +28,11 @@
       <groupId>jakarta.persistence</groupId>
       <artifactId>jakarta.persistence-api</artifactId>
       <version>3.1.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>33.4.0-jre</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.data</groupId>
