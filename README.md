@@ -8,9 +8,9 @@ domain enums and money unit conversion helpers.
 
 - `OutboxEventEntity` - base JPA mapped superclass for service-specific outbox
   event tables.
-- `OutboxEventStatus` - common event states: `PENDING`, `PUBLISHED`, `FAILED`.
-- `KafkaOnSentHandler` - helper interface for updating outbox events after Kafka
-  send callbacks.
+- `OutboxEventStatus` - common event states: `PENDING`, `PROCESSING`, `PUBLISHED`, `FAILED`.
+- `OutboxProperties`, `JpaOutboxAttemptStore`, `OutboxDispatcher` - validated
+  settings, atomic PostgreSQL claims, retries, lease recovery and bounded sends.
 - `processedevent` - base mapped superclass for processed-event tables.
 - `BaseProcessedEventRepository` - Spring Data repository base for processed
   events.
@@ -46,7 +46,7 @@ Add the GitHub Packages repository:
 <repositories>
     <repository>
         <id>github</id>
-        <url>https://maven.pkg.github.com/aburov30/bankingoutboxsupport</url>
+        <url>https://maven.pkg.github.com/aburov30/bankingsupport</url>
     </repository>
 </repositories>
 ```
@@ -57,7 +57,7 @@ Add the dependency:
 <dependency>
     <groupId>com.burov</groupId>
     <artifactId>support</artifactId>
-    <version>0.0.1</version>
+    <version>0.0.4</version>
 </dependency>
 ```
 
@@ -105,8 +105,8 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
 }
 ```
 
-Use `KafkaOnSentHandler` from the component that receives Kafka send results.
-See the [usage guide](docs/usage.md) for a complete example and retry behavior.
+Wire `OutboxDispatcher` with a service-owned sender returning a broker ack stage.
+See the [usage guide](docs/usage.md) for setup and delivery guarantees.
 
 Use shared enums and money conversion helpers directly from their packages:
 

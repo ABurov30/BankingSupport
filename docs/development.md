@@ -17,7 +17,7 @@
 ```
 
 The library source lives under `src/main/java`. Keep this project as a reusable
-support library; service-specific polling, locking, Kafka producer, and domain
+support library; service-specific Kafka producer and domain
 logic should stay in consuming services.
 
 Public package areas:
@@ -71,7 +71,7 @@ single non-static import group expected by Checkstyle.
 The current artifact version is defined in `pom.xml`:
 
 ```xml
-<version>0.0.1</version>
+<version>0.0.4</version>
 ```
 
 When changing the published version, update:
@@ -96,7 +96,7 @@ mvn --batch-mode clean deploy
 The package is deployed to GitHub Packages:
 
 ```xml
-<url>https://maven.pkg.github.com/aburov30/bankingoutboxsupport</url>
+<url>https://maven.pkg.github.com/aburov30/bankingsupport</url>
 ```
 
 Before creating a release, verify that `pom.xml` contains the intended version

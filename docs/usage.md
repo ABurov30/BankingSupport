@@ -11,7 +11,7 @@ Add the GitHub Packages repository:
 <repositories>
     <repository>
         <id>github</id>
-        <url>https://maven.pkg.github.com/aburov30/bankingoutboxsupport</url>
+        <url>https://maven.pkg.github.com/aburov30/bankingsupport</url>
     </repository>
 </repositories>
 ```
@@ -22,7 +22,7 @@ Add the library dependency:
 <dependency>
     <groupId>com.burov</groupId>
     <artifactId>support</artifactId>
-    <version>0.0.1</version>
+    <version>0.0.4</version>
 </dependency>
 ```
 
@@ -56,16 +56,16 @@ The base class provides these columns:
 | `event_type` | Event name, such as `AccountCreated`. |
 | `payload` | JSON payload stored as `jsonb`. |
 | `status` | Stored from the `outboxEventStatus` property: `PENDING`, `PUBLISHED`, or `FAILED`. |
-| `retry_count` | Number of publish attempts recorded by the handler. |
+| `retry_count` | Number of claimed attempts, including interrupted sends. |
 | `error_message` | Last send error message. |
 | `created_at` | Creation timestamp managed by Hibernate. |
 | `sent_at` | Time when the event was marked as published. |
 | `topic` | Kafka topic name. |
-| `event_key` | Unique event key used for publishing and deduplication. |
+| `event_key` | Kafka partition key; use the row ID for event deduplication. |
 | `schema_version` | Event schema version. |
 | `next_retry_at` | Earliest time for the next retry attempt. |
 | `locked_at` | Optional worker lock timestamp. |
-| `locked_by` | Optional worker lock owner. |
+| `locked_by` | Unique attempt token while PROCESSING. |
 | `correlation_id` | Optional correlation identifier for tracing. |
 
 ## Outbox Repository
@@ -82,48 +82,57 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
 }
 ```
 
-Service-specific poller queries, locking queries, and retry filters should live
-in the service repository, because each service owns its outbox table and
-publishing workflow.
+## Shared Dispatch
 
-## Kafka Send Result Handling
-
-Implement `KafkaOnSentHandler` in the component that receives Kafka send
-callbacks:
+Version 0.0.4 removes the legacy Kafka callback handler. Migrate all publishers together.
+Bind `OutboxProperties` using Spring Boot Binder and register it as `outboxProperties`.
+Use `OutboxProperties.defaults()` when no `outbox` settings are present.
 
 ```java
-package com.example.outbox;
-
-import java.util.UUID;
-
-import org.springframework.stereotype.Component;
-import outboxsupport.KafkaOnSentHandler;
-
-@Component
-public class OutboxKafkaResultHandler implements KafkaOnSentHandler {
-    private final OutboxEventRepository repository;
-
-    public OutboxKafkaResultHandler(OutboxEventRepository repository) {
-        this.repository = repository;
-    }
-
-    public void handleSuccess(UUID eventId) {
-        onPublish(eventId, repository);
-    }
-
-    public void handleFailure(UUID eventId, Throwable error) {
-        onFailed(eventId, error, repository);
-    }
-}
+var store = new JpaOutboxAttemptStore<>(entityManager, transactionManager,
+    OutboxEvent.class, "outbox_events", properties);
+var dispatcher = new OutboxDispatcher<>(store, properties, transactionManager,
+    meterRegistry, "outbox_events");
+// Call from the service scheduler; sender returns the Kafka acknowledgement future.
+dispatcher.dispatch(event -> kafkaTemplate.send(buildServiceMessage(event)));
 ```
 
-`onPublish` loads the event, sets the status to `PUBLISHED`, sets `sent_at` to
-the current time, increments `retry_count`, and saves the event.
+Use a Spring shared EntityManager proxy and its matching JpaTransactionManager.
+The store claims in REQUIRES_NEW; dispatch suspends any caller transaction before
+claiming and sending. Entities are detached before the sender runs. The sender must
+return promptly and its stage must complete only on broker acknowledgement/failure.
+Schedule with the validated properties' polling and initialDelay durations.
 
-`onFailed` loads the event, stores the error message, increments `retry_count`,
-sets `next_retry_at` to five seconds in the future, and saves the event. Failed
-events remain `PENDING` until the fifth recorded attempt; after that they become
-`FAILED`.
+Defaults: polling=5s, initial-delay=5s, batch-size=50, max-in-flight=50, lease=60s,
+retry-delay=5s, max-attempts=5 (all under `outbox`). Durations except initial delay
+must be at least 1ms; initial delay must be nonnegative; counts must be positive.
+
+Claims use FOR UPDATE SKIP LOCKED, respect next_retry_at and increment retry_count
+before sending. Each attempt writes PROCESSING, a unique locked_by token and database
+locked_at time. Completion uses a separate transaction guarded by ID, PROCESSING and
+token. A superseded callback cannot overwrite a newer attempt. Failures wait retry-delay;
+max-attempts includes crashes. Recovery processes at most batch-size expired leases
+per poll and clears their tokens, returning them to PENDING or FAILED at the limit.
+
+In-flight is per dispatcher, including outstanding acknowledgements. Lease expiry
+does not release local slots. Configure Kafka delivery.timeout.ms below the lease
+with margin for scheduling and DB completion. A never-completing future requires
+investigation or publisher restart; another instance can recover its DB lease.
+DB callback failures are logged and recovered through lease expiry.
+
+Micrometer metrics, tagged by outbox name: outbox.claimed, outbox.recovered,
+outbox.completed (outcome=published/failed/stale), outbox.callback.errors,
+outbox.in.flight, outbox.ack.duration.
+
+Each service owns Liquibase migrations: allow PROCESSING in the status constraint,
+retain locked_by (at least 36 characters), locked_at and next_retry_at columns,
+and add partial pending/lease indexes. Stop and drain all old publishers and callbacks
+before migration and restart. Rollback requires resolving PROCESSING rows first.
+Payload mappings, topics, keys, headers and entities remain in the services.
+
+Delivery is at least once. Tokens protect database updates, not Kafka sends:
+an old process may send after lease expiry. Consumers must deduplicate by eventId.
+Concurrent publishers and retries do not guarantee business ordering per aggregate.
 
 ## Idempotent Consumption
 
